@@ -41,8 +41,7 @@ def main():
 
     json_file = PATH/f'{name}.json'
     index_file = PATH/f'{name}_index.csv'
-    if not index_file.exists():
-        prepare_url_index(json_file, index_file, pct=args.pct)
+    prepare_url_index(json_file, index_file, pct=args.pct)
 
     log.info(f'Downloading {args.pct:2.2%} of {json_file}...')
     index = pd.read_csv(index_file)
