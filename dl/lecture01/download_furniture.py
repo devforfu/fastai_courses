@@ -1,15 +1,17 @@
 import os
 import json
-import shutil
+import argparse
+from io import BytesIO
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from functools import partial
-from collections import defaultdict
+import configparser
 from multiprocessing import Pool, cpu_count
 
 import requests
 import numpy as np
 import pandas as pd
+from PIL import Image
 from fastai.core import partition
 
 from logger import get_logger
@@ -21,44 +23,66 @@ TRAIN_IMAGES = IMAGES/'train'
 VALID_IMAGES = IMAGES/'valid'
 TEST_IMAGES = IMAGES/'test'
 LABELS = PATH/'labels.csv'
+
+HEADERS = {'User-Agent': 'Python3'}
+
 RANDOM_STATE = 1
-
-
 np.random.seed(RANDOM_STATE)
+
 log = get_logger()
 
 
 def main():
-    for dirname in (IMAGES, TRAIN_IMAGES, VALID_IMAGES, TEST_IMAGES):
-        os.makedirs(dirname, exist_ok=True)
+    args = parse_args()
 
-    paths = [
-        ('train', TRAIN_IMAGES, 0.1),
-        ('validation', VALID_IMAGES, 0.2),
-        ('test', TEST_IMAGES, 0.5)]
+    name = args.subset
+    path = IMAGES/name
+    os.makedirs(path, exist_ok=True)
 
-    for name, path, fraction in paths:
-        sentinel = IMAGES / f'{name}.sentinel'
+    json_file = PATH/f'{name}.json'
+    index_file = PATH/f'{name}_index.csv'
+    if not index_file.exists():
+        prepare_url_index(json_file, index_file, pct=args.pct)
 
-        if sentinel.exists():
-            log.info('Already downloaded: %s', path)
-            continue
+    log.info(f'Downloading {args.pct:2.2%} of {json_file}...')
+    index = pd.read_csv(index_file)
+    info = download(index, path, args.chunk_size, args.proxy)
+    info.to_pickle(IMAGES/f'{name}_info.pickle')
 
-        json_file = PATH/f'{name}.json'
-        index_file = PATH/f'{name}_index.csv'
 
-        if not index_file.exists():
-            prepare_url_index(json_file, index_file, pct=fraction)
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--subset',
+        default='train', choices=['train', 'validation', 'test'],
+        help='Subset to download'
+    )
+    parser.add_argument(
+        '--pct',
+        default=0.1, type=float,
+        help='Percent of images to download'
+    )
+    parser.add_argument(
+        '--chunk-size',
+        default=1000, type=int,
+        help='Number of images to download per multi-threaded pool run'
+    )
+    parser.add_argument(
+        '--proxy',
+        default=None,
+        help='proxy configuration (if required)'
+    )
 
-        log.info(f'Downloading {json_file}...')
-        index = pd.read_csv(index_file)
-        info = download(index, path)
-        info.to_pickle(IMAGES/f'{name}_info.pickle')
+    args = parser.parse_args()
 
-        with sentinel.open('w') as file:
-            file.write('1')
+    if args.proxy is not None:
+        conf = configparser.ConfigParser()
+        conf.read(args.proxy)
+        proxy = dict(conf['proxy'])
+        url = 'socks5://{username}:{password}@{host}:{port}'.format(**proxy)
+        args.proxy = {'http': url, 'https': url}
 
-    log.info('Done!')
+    return args
 
 
 def prepare_url_index(json_file, index_file, pct=0.1):
@@ -102,81 +126,75 @@ class ImageInfo:
     path: Path
     label_id: int
     image_id: int
+    url: str
+    failed: bool = False
 
 
-def download(index, path):
+def download(index, path, chunk_size: int=1000, proxy: dict=None):
     """Downloads images with URLs from index dataframe."""
 
     n_cpu = cpu_count()
-    worker = partial(download_single, path)
+    worker = partial(download_single, path, proxy)
     queue = index.to_dict('records')
     meta = []
 
     with Pool(n_cpu) as pool:
-        n = 1000
-        chunk_size = len(queue)//n
         chunks = partition(queue, chunk_size)
         n_chunks = len(chunks)
-
         for i, chunk in enumerate(chunks):
             log.info('Downloading chunk %d of %d' % (i+1, n_chunks))
-            running = True
-            count, total = 0, 3
-            while running:
-                try:
-                    data = [x for x in pool.imap_unordered(worker, chunk) if x]
-                    meta.extend([asdict(info) for info in data])
-                except:
-                    log.error('Something went wrong with pool downloader!')
-                    log.error('Trying again...')
-                    count += 1
-                    running = count >= total
-                    if not running:
-                        log.warning('Giving up to download chunk %d', i)
-                else:
-                    running = False
+            data = [x for x in pool.imap_unordered(worker, chunk) if not x.failed]
+            meta.extend([asdict(info) for info in data])
 
     return pd.DataFrame(meta)
 
 
-def download_single(folder, info):
+def download_single(folder, proxy, info):
     url = info['url']
-    img_name = str(info['image_id']) + ".jpg"
-    path = folder / img_name
-    info = ImageInfo(path, info['label_id'], info['image_id'])
+    img_name = str(info['image_id']) + '.jpg'
+    path = folder/img_name
+
+    result = {
+        'label_id': info['label_id'],
+        'image_id': info['image_id'],
+        'path': path,
+        'url': url}
 
     if path.exists():
-        log.info('File already downloaded: %s', img_name)
-        return info
+        return ImageInfo(**result)
+
+    error, msg = True, ''
+    try:
+        r = requests.get(
+            url, allow_redirects=True, timeout=60,
+            headers=HEADERS, proxies=proxy)
+        r.raise_for_status()
+        error = False
+    except requests.HTTPError:
+        msg = 'HTTP error'
+    except requests.ConnectionError:
+        msg = 'Connection error'
+    except requests.Timeout:
+        msg = 'Waiting response too long'
+    except Exception as e:
+        msg = str(e)[:80]
+
+    if error:
+        log.warning('%s: %s', msg, url)
+        return ImageInfo(failed=True, **result)
 
     try:
-        r = requests.get(url, timeout=60.0, stream=True)
-        r.raise_for_status()
-    except requests.HTTPError:
-        log.warning(f'Cannot download URL: {url}')
-        return None
-    except requests.ConnectionError:
-        log.warning(f'Connection error! URL: {url}')
-        return None
-    except requests.Timeout:
-        log.warning(f'Waiting response too long for URL: {url}')
-        return None
-    except Exception:
-        log.warning(f'Unexpected error while downloading URL: {url}')
-        return None
-
-    # with path.open('wb') as file:
-    #     file.write(r.content)
-
-    with path.open('wb') as file:
-        r.raw.decode_content = True
-        shutil.copyfileobj(r.raw, file)
+        pil_image = Image.open(BytesIO(r.content)).convert('RGB')
+        pil_image.save(path, format='JPEG', quality=90)
+    except Exception as e:
+        log.warning('Cannot create PIL Image: %s', str(e))
+        return ImageInfo(failed=True, **result)
 
     if os.stat(path).st_size <= 0:
-        log.warning('Empty image file content: %s', path)
-        return None
+        log.warning('Saved image file is emtpy: %s', path)
+        return ImageInfo(failed=True, **result)
 
-    return info
+    return ImageInfo(**result)
 
 
 if __name__ == '__main__':
