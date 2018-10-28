@@ -1,26 +1,25 @@
-
 from pathlib import Path
-from PIL import ImageDraw as PILDraw
-from PIL import Image as PILImage
-from cycler import cycler
-from itertools import chain
-import pandas as pd
-import numpy as np
 from typing import Union
+from itertools import chain
+from functools import partial
 from multiprocessing import Pool, cpu_count
 
-from torch.utils.data import Dataset
-from torch.nn import functional as F
-from functools import partial
-from fastai.vision import Image
-
-# from fastai import *
-from fastai.vision import ConvLearner, ImageDataBunch, imagenet_stats, get_transforms
-from sklearn.model_selection import train_test_split
-from torchvision.transforms.functional import to_tensor
-from torchvision.models import resnet34
-from logger import get_logger
 import feather
+import numpy as np
+import pandas as pd
+from PIL import ImageDraw as PILDraw
+from PIL import Image as PILImage
+
+from torch.nn import functional as F
+from torch.utils.data import Dataset
+from torchvision.models import resnet34
+from torchvision.transforms.functional import to_tensor
+from fastai.vision import Image
+from fastai.callbacks.tracker import SaveModelCallback
+from fastai.vision import ConvLearner, ImageDataBunch, imagenet_stats, get_transforms
+
+from logger import get_logger
+
 
 PATH = Path.home()/'data'/'doodle'/'prepared'
 
@@ -34,24 +33,34 @@ FloatOrInt = Union[float, int]
 def main():
     train_ds = QuickDraw(PATH, train=True, take_subset=True)
     valid_ds = QuickDraw(PATH, train=False, take_subset=True)
-    bunch = ImageDataBunch.create(train_ds, valid_ds, bs=40, size=224, ds_tfms=get_transforms())
+    bunch = ImageDataBunch.create(train_ds, valid_ds, bs=256, size=224, ds_tfms=get_transforms())
     bunch.normalize(imagenet_stats)
 
-
     learn = ConvLearner(bunch, resnet34)
+    learn.fit_one_cycle(5, callbacks=[SaveModelCallback()])
+    learn.save('sz_224')
 
-    learn.fit_one_cycle(1)
-
-
-# def fastai_dataset(dataset_cls):
-#
-#     def as_tensor(self, )
-#
-#     dataset_cls.__getitem__ =
+    log.info('Done!')
 
 
+def fastai_dataset(loss_func):
 
-# @fastai_dataset
+    def class_wrapper(dataset_cls):
+
+        def get_n_classes(self):
+            return len(self.classes)
+
+        def get_loss_func(self):
+            return loss_func
+
+        dataset_cls.c = property(get_n_classes)
+        dataset_cls.loss_func = property(get_loss_func)
+        return dataset_cls
+
+    return class_wrapper
+
+
+@fastai_dataset(F.cross_entropy)
 class QuickDraw(Dataset):
 
     img_size = (256, 256)
@@ -79,13 +88,21 @@ class QuickDraw(Dataset):
             cache_file.parent.mkdir(parents=True, exist_ok=True)
             cats_df.to_feather(cache_file)
 
+        targets = cats_df.word.values
+        classes = np.unique(targets)
+        class2idx = {v: k for k, v in enumerate(classes)}
+        labels = np.array([class2idx[c] for c in targets])
+
         self.root = root
         self.train = train
         self.bg_color = bg_color
         self.stroke_color = stroke_color
         self.lw = lw
         self.data = cats_df.points.values
-        self.labels = cats_df.word.values
+        self.classes = classes
+        self.class2idx = class2idx
+        self.labels = labels
+        self._cached_images = {}
 
     def __len__(self):
         return len(self.data)
