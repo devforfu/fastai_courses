@@ -17,12 +17,15 @@ from torchvision.models import resnet34
 from torchvision.transforms.functional import to_tensor
 from fastai.vision import Image
 from fastai.callbacks.tracker import SaveModelCallback
-from fastai.vision import ConvLearner, ImageDataBunch, imagenet_stats, get_transforms
+from fastai.vision import create_cnn, ImageDataBunch, imagenet_stats, get_transforms
 
 from logger import get_logger
 
 
-PATH = Path.home()/'data'/'doodle'/'prepared'
+PATH = Path.home()/'data'/'doodle'
+TRAIN_DATA = PATH/'train'
+PREPARED = PATH/'prepared'
+DEBUG = False
 
 
 log = get_logger()
@@ -34,14 +37,14 @@ FloatOrInt = Union[float, int]
 def main():
     args = parse_args()
 
-    train_ds = QuickDraw(PATH, train=True, take_subset=True)
-    valid_ds = QuickDraw(PATH, train=False, take_subset=True)
+    train_ds = QuickDraw(PREPARED, train=True, take_subset=True, use_cache=args['use_cache'])
+    valid_ds = QuickDraw(PREPARED, train=False, take_subset=True, use_cache=args['use_cache'])
     bunch = ImageDataBunch.create(
         train_ds, valid_ds,
         bs=args['batch_size'], size=args['image_size'], ds_tfms=get_transforms())
     bunch.normalize(imagenet_stats)
 
-    learn = ConvLearner(bunch, resnet34)
+    learn = create_cnn(bunch, resnet34)
     cbs = [SaveModelCallback(learn)]
     learn.fit_one_cycle(args['n_epochs'], callbacks=cbs)
     learn.save('sz_224')
@@ -50,6 +53,7 @@ def main():
 
 
 def parse_args():
+    global DEBUG
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-bs', '--batch-size',
@@ -66,11 +70,26 @@ def parse_args():
         default=1, type=int,
         help='Number of training epochs'
     )
-    return vars(parser.parse_args())
+    parser.add_argument(
+        '-cache', '--use-cache',
+        action='store_true',
+        help='Use previously parsed CSV data'
+    )
+    parser.add_argument(
+        '-d', '--debug',
+        action='store_true',
+        help='Process file in single-threaded mode to simplify debugging'
+    )
+    args = vars(parser.parse_args())
+    DEBUG = args['debug']
+    return args
 
 
 def fastai_dataset(loss_func):
+    """A class decorator to convert custom dataset into its fastai compatible version.
 
+    The decorator attaches required properties to the dataset to use it with
+    """
     def class_wrapper(dataset_cls):
 
         def get_n_classes(self):
@@ -99,14 +118,15 @@ class QuickDraw(Dataset):
         cache_file = subfolder.parent / 'cache' / f'{subfolder.name}.feather'
 
         if use_cache and cache_file.exists():
-            log.info('Reading cached data')
+            log.info('Reading cached data from %s', cache_file)
             # walk around to deal with pd.read_feather nthreads error
             cats_df = feather.read_dataframe(cache_file)
 
         else:
-            log.info('Parsing CSV files...')
+            log.info('Parsing CSV files from %s...', subfolder)
             subset_size = subset_size if take_subset else None
-            cats_df = read_parallel(subfolder.glob('*.csv'), subset_size)
+            n_jobs = 1 if DEBUG else None
+            cats_df = read_parallel(subfolder.glob('*.csv'), subset_size, n_jobs)
             if train:
                 cats_df = cats_df.sample(frac=1)
             cats_df.reset_index(drop=True, inplace=True)
@@ -135,14 +155,19 @@ class QuickDraw(Dataset):
 
     def __getitem__(self, item):
         points, target = self.data[item], self.labels[item]
+        image = self.to_pil_image(points)
+        return image, target
+
+    def to_pil_image(self, points):
         canvas = PILImage.new('RGB', self.img_size, color=self.bg_color)
         draw = PILDraw.Draw(canvas)
-        chunks = [int(x) for x in points.split(',')]
-        while len(chunks) >= 4:
-            line, chunks = chunks[:4], chunks[2:]
-            draw.line(tuple(line), fill=self.stroke_color, width=self.lw)
+        for segment in points.split('|'):
+            chunks = [int(x) for x in segment.split(',')]
+            while len(chunks) >= 4:
+                line, chunks = chunks[:4], chunks[2:]
+                draw.line(tuple(line), fill=self.stroke_color, width=self.lw)
         image = Image(to_tensor(canvas))
-        return image, target
+        return image
 
 
 def read_parallel(files, subset_size=None, n_jobs=None):
@@ -177,12 +202,29 @@ def _get_number_of_samples(df: pd.DataFrame, size: FloatOrInt):
     raise ValueError(f'unexpected sample size value: {size}')
 
 
+def to_pil_image(points, size, bg_color='white', stroke_color='black', lw=2):
+    canvas = PILImage.new('RGB', size, color=bg_color)
+    draw = PILDraw.Draw(canvas)
+    chunks = [int(x) for x in points.split(',')]
+    while len(chunks) >= 4:
+        line, chunks = chunks[:4], chunks[2:]
+        draw.line(tuple(line), fill=stroke_color, width=lw)
+    image = Image(to_tensor(canvas))
+    return image
+
+
 def to_tuples(segments):
-    return list(chain(*[zip(*segment) for segment in eval(segments)]))
+    return [list(zip(*segment)) for segment in eval(segments)]
+    # return list(chain(*[zip(*segment) for segment in eval(segments)]))
 
 
 def to_string(segments):
-    return ','.join([str(x) for x in chain(*to_tuples(segments))])
+    strings = [','.join([str(x) for x in chain(*segment)]) for segment in to_tuples(segments)]
+    string = '|'.join(strings)
+    return string
+
+
+    # return ','.join([str(x) for x in chain(*to_tuples(segments))])
 
 
 if __name__ == '__main__':
