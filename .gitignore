@@ -3,3 +3,6 @@
 **/*.py[cod]
 *.csv
 **/*.ini
+*.pth
+*.pickle
+*.hd5
