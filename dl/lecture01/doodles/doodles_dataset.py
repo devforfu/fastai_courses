@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 from typing import Union
 from itertools import chain
@@ -31,16 +32,41 @@ FloatOrInt = Union[float, int]
 
 
 def main():
+    args = parse_args()
+
     train_ds = QuickDraw(PATH, train=True, take_subset=True)
     valid_ds = QuickDraw(PATH, train=False, take_subset=True)
-    bunch = ImageDataBunch.create(train_ds, valid_ds, bs=256, size=224, ds_tfms=get_transforms())
+    bunch = ImageDataBunch.create(
+        train_ds, valid_ds,
+        bs=args['batch_size'], size=args['image_size'], ds_tfms=get_transforms())
     bunch.normalize(imagenet_stats)
 
     learn = ConvLearner(bunch, resnet34)
-    learn.fit_one_cycle(5, callbacks=[SaveModelCallback()])
+    cbs = [SaveModelCallback(learn)]
+    learn.fit_one_cycle(args['n_epochs'], callbacks=cbs)
     learn.save('sz_224')
 
     log.info('Done!')
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-bs', '--batch-size',
+        default=256, type=int,
+        help='Batch size'
+    )
+    parser.add_argument(
+        '-sz', '--image-size',
+        default=224, type=int,
+        help='Image size'
+    )
+    parser.add_argument(
+        '-n', '--n-epochs',
+        default=1, type=int,
+        help='Number of training epochs'
+    )
+    return vars(parser.parse_args())
 
 
 def fastai_dataset(loss_func):
@@ -80,7 +106,7 @@ class QuickDraw(Dataset):
         else:
             log.info('Parsing CSV files...')
             subset_size = subset_size if take_subset else None
-            cats_df = _read_parallel(subfolder.glob('*.csv'), subset_size)
+            cats_df = read_parallel(subfolder.glob('*.csv'), subset_size)
             if train:
                 cats_df = cats_df.sample(frac=1)
             cats_df.reset_index(drop=True, inplace=True)
@@ -119,8 +145,8 @@ class QuickDraw(Dataset):
         return image, target
 
 
-def _read_parallel(files, subset_size=None, n_jobs=None):
-    worker = partial(_read_csv, subset_size)
+def read_parallel(files, subset_size=None, n_jobs=None):
+    worker = partial(read_csv, subset_size)
     n_jobs = n_jobs or cpu_count()
     with Pool(n_jobs) as pool:
         categories = pool.map(worker, files)
@@ -129,7 +155,7 @@ def _read_parallel(files, subset_size=None, n_jobs=None):
     return df
 
 
-def _read_csv(subset_size, file):
+def read_csv(subset_size, file):
     cat_df = pd.read_csv(file)
     cat_df = cat_df[cat_df.recognized]
     if subset_size is not None:
