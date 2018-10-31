@@ -13,11 +13,18 @@ from PIL import Image as PILImage
 
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from torchvision.models import resnet34
 from torchvision.transforms.functional import to_tensor
-from fastai.vision import Image
+from torchvision.models import resnet18, resnet34, resnet50, squeezenet1_1
+
 from fastai.callbacks.tracker import SaveModelCallback
-from fastai.vision import create_cnn, ImageDataBunch, imagenet_stats, get_transforms
+from fastai.metrics import accuracy, error_rate
+from fastai.vision import (
+    ImageDataBunch,
+    imagenet_stats,
+    get_transforms,
+    create_cnn,
+    Image
+)
 
 from logger import get_logger
 
@@ -26,6 +33,14 @@ PATH = Path.home()/'data'/'doodle'
 TRAIN_DATA = PATH/'train'
 PREPARED = PATH/'prepared'
 DEBUG = False
+
+
+ARCHS = {
+    'resnet18': resnet18,
+    'resnet34': resnet34,
+    'resnet50': resnet50,
+    'squeezenet': squeezenet1_1
+}
 
 
 log = get_logger()
@@ -37,18 +52,49 @@ FloatOrInt = Union[float, int]
 def main():
     args = parse_args()
 
-    train_ds = QuickDraw(PREPARED, train=True, take_subset=True, use_cache=args['use_cache'])
-    valid_ds = QuickDraw(PREPARED, train=False, take_subset=True, use_cache=args['use_cache'])
+    log.info('Epochs: %d', args['n_epochs'])
+    log.info('Model: %s', args['network'])
+    log.info('Train size (per category): %d', args['train_size'])
+    log.info('Valid size (per category): %d', args['valid_size'])
+
+    train_ds = QuickDraw(
+        PREPARED,
+        train=True,
+        take_subset=True,
+        use_cache=args['use_cache'],
+        subset_size=args['train_size'])
+
+    valid_ds = QuickDraw(
+        PREPARED,
+        train=False,
+        take_subset=True,
+        use_cache=args['use_cache'],
+        subset_size=args['valid_size'])
+
     bunch = ImageDataBunch.create(
         train_ds, valid_ds,
-        bs=args['batch_size'], size=args['image_size'], ds_tfms=get_transforms())
+        bs=args['batch_size'],
+        size=args['image_size'],
+        ds_tfms=get_transforms())
+
     bunch.normalize(imagenet_stats)
 
-    learn = create_cnn(bunch, resnet34)
+    learn = create_cnn(bunch, args['network'])
+    learn.metrics = [accuracy, error_rate]
     cbs = [SaveModelCallback(learn)]
-    learn.fit_one_cycle(args['n_epochs'], callbacks=cbs)
-    learn.save('sz_224')
+    n = args['n_epochs']
 
+    learn.fit_one_cycle(1)
+    learn.save('one_224')
+
+    learn.unfreeze()
+    learn.freeze_to(-2)
+    learn.fit_one_cycle(n - 2, max_lr=slice(1e-4, 1e-3))
+    learn.save('unfreeze_224')
+
+    learn.unfreeze()
+    learn.fit_one_cycle(1, callbacks=cbs, max_lr=slice(10e-5, 5e-5))
+    learn.save(f'final_224')
     log.info('Done!')
 
 
@@ -66,6 +112,20 @@ def parse_args():
         help='Image size'
     )
     parser.add_argument(
+        '-t', '--train-size',
+        default=1000, type=int,
+        help='Number of observations (per category) to use for training'
+    )
+    parser.add_argument(
+        '-v', '--valid-size',
+        default=200, type=int,
+        help='Number of observations (per category) to use for validation'
+    )
+    parser.add_argument(
+        '-arch', '--network',
+        default='resnet34', choices=sorted(list(ARCHS))
+    )
+    parser.add_argument(
         '-n', '--n-epochs',
         default=1, type=int,
         help='Number of training epochs'
@@ -80,7 +140,14 @@ def parse_args():
         action='store_true',
         help='Process file in single-threaded mode to simplify debugging'
     )
+    parser.add_argument(
+        '-c', '--continue',
+        action='store_true',
+        help='Loads previously trained model to continue training process; '
+             'cache is enabled automatically.'
+    )
     args = vars(parser.parse_args())
+    args['network'] = ARCHS[args['network']]
     DEBUG = args['debug']
     return args
 
