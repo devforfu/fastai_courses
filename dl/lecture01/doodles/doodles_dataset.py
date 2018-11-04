@@ -1,3 +1,4 @@
+import sys
 import argparse
 from pathlib import Path
 from typing import Union
@@ -11,11 +12,13 @@ import pandas as pd
 from PIL import ImageDraw as PILDraw
 from PIL import Image as PILImage
 
+import torch
 from torch.nn import functional as F
 from torch.utils.data import Dataset
 from torchvision.transforms.functional import to_tensor
-from torchvision.models import resnet18, resnet34, resnet50, squeezenet1_1
+from torchvision.models import resnet18, resnet34, resnet50, resnet101
 
+from fastai import defaults
 from fastai.callbacks.tracker import SaveModelCallback
 from fastai.metrics import accuracy, error_rate
 from fastai.vision import (
@@ -39,7 +42,7 @@ ARCHS = {
     'resnet18': resnet18,
     'resnet34': resnet34,
     'resnet50': resnet50,
-    'squeezenet': squeezenet1_1
+    'resnet101': resnet101
 }
 
 
@@ -51,56 +54,69 @@ FloatOrInt = Union[float, int]
 
 def main():
     args = parse_args()
+    n, prefix = args['n_epochs'], args['prefix']
+    bs, img_sz = args['batch_size'], args['image_size']
+    prefix += '_' if prefix else ''
 
-    log.info('Epochs: %d', args['n_epochs'])
-    log.info('Model: %s', args['network'])
-    log.info('Train size (per category): %d', args['train_size'])
-    log.info('Valid size (per category): %d', args['valid_size'])
-
-    train_ds = QuickDraw(
-        PREPARED,
-        train=True,
-        take_subset=True,
-        use_cache=args['use_cache'],
-        subset_size=args['train_size'])
-
-    valid_ds = QuickDraw(
-        PREPARED,
-        train=False,
-        take_subset=True,
-        use_cache=args['use_cache'],
-        subset_size=args['valid_size'])
-
-    bunch = ImageDataBunch.create(
-        train_ds, valid_ds,
-        bs=args['batch_size'],
-        size=args['image_size'],
-        ds_tfms=get_transforms())
-
-    bunch.normalize(imagenet_stats)
-
+    bunch = create_data_bunch(bs, img_sz, args['train_size'], args['valid_size'], use_cache=args['use_cache'])
+    train_sz, valid_sz = len(bunch.train_dl)/bunch.c, len(bunch.valid_dl)/bunch.c
     learn = create_cnn(bunch, args['network'])
     learn.metrics = [accuracy, error_rate]
-    cbs = [SaveModelCallback(learn)]
-    n = args['n_epochs']
 
-    learn.fit_one_cycle(1)
-    learn.save('one_224')
+    if args['continue']:
+        log.info('Continue training using cached data')
 
-    learn.unfreeze()
-    learn.freeze_to(-2)
-    learn.fit_one_cycle(n - 2, max_lr=slice(1e-4, 1e-3))
-    learn.save('unfreeze_224')
+    log.info('Epochs: %d', args['n_epochs'])
+    log.info('Model: %s', args['network_name'])
+    log.info('# of classes: %d', bunch.c)
+    log.info('Train size (per class): %d', train_sz)
+    log.info('Valid size (per class): %d', valid_sz)
 
-    learn.unfreeze()
-    learn.fit_one_cycle(1, callbacks=cbs, max_lr=slice(10e-5, 5e-5))
-    learn.save(f'final_224')
+    if args['continue']:
+        cbs = [SaveModelCallback(learn, name='bestmodel_continue')]
+
+        try:
+            learn.load(f'{prefix}final_224')
+        except Exception as e:
+            log.error('Cannot restore model')
+            log.error(e)
+            sys.exit(1)
+
+        learn.unfreeze()
+        learn.fit_one_cycle(n, callabacks=cbs, max_lr=slice(3e-5, 3e-5))
+        learn.save(f'{prefix}continued_224')
+
+    else:
+        cbs = [SaveModelCallback(learn)]
+
+        learn.fit_one_cycle(1)
+        learn.save(f'{prefix}one_224')
+
+        learn.unfreeze()
+        learn.freeze_to(-2)
+        learn.fit_one_cycle(n - 2, max_lr=slice(1e-4, 1e-3))
+        learn.save(f'{prefix}unfreeze_224')
+
+        learn.unfreeze()
+        learn.fit_one_cycle(1, callbacks=cbs, max_lr=slice(10e-5, 5e-5))
+        learn.save(f'{prefix}final_224')
+
     log.info('Done!')
 
 
 def parse_args():
     global DEBUG
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-p', '--prefix',
+        default=None,
+        help='Prefix to append to the name of file with saved model'
+    )
+    parser.add_argument(
+        '-dev', '--device',
+        default=None,
+        help='PyTorch device used to train model'
+    )
     parser.add_argument(
         '-bs', '--batch-size',
         default=256, type=int,
@@ -147,9 +163,42 @@ def parse_args():
              'cache is enabled automatically.'
     )
     args = vars(parser.parse_args())
+    args['network_name'] = args['network']
     args['network'] = ARCHS[args['network']]
+    args['prefix'] = args['prefix'] or args['network_name']
+
+    if args['device']:
+        defaults.device = torch.device(args['device'])
+
+    if args['continue']:
+        args['use_cache'] = True
+
     DEBUG = args['debug']
+
     return args
+
+
+def create_data_bunch(bs, img_sz, train_sz=None, valid_sz=None, use_cache=False):
+    train_ds = QuickDraw(
+        PREPARED,
+        train=True,
+        take_subset=True,
+        use_cache=use_cache,
+        subset_size=train_sz)
+
+    valid_ds = QuickDraw(
+        PREPARED,
+        train=False,
+        take_subset=True,
+        use_cache=use_cache,
+        subset_size=valid_sz)
+
+    bunch = ImageDataBunch.create(
+        train_ds, valid_ds, bs=bs, size=img_sz, ds_tfms=get_transforms())
+
+    bunch.normalize(imagenet_stats)
+
+    return bunch
 
 
 def fastai_dataset(loss_func):
@@ -222,19 +271,12 @@ class QuickDraw(Dataset):
 
     def __getitem__(self, item):
         points, target = self.data[item], self.labels[item]
-        image = self.to_pil_image(points)
+        image = self.to_image_tensor(points)
         return image, target
 
-    def to_pil_image(self, points):
-        canvas = PILImage.new('RGB', self.img_size, color=self.bg_color)
-        draw = PILDraw.Draw(canvas)
-        for segment in points.split('|'):
-            chunks = [int(x) for x in segment.split(',')]
-            while len(chunks) >= 4:
-                line, chunks = chunks[:4], chunks[2:]
-                draw.line(tuple(line), fill=self.stroke_color, width=self.lw)
-        image = Image(to_tensor(canvas))
-        return image
+    def to_image_tensor(self, points):
+        img = to_pil_image(points, self.img_size, self.bg_color, self.stroke_color, self.lw)
+        return Image(to_tensor(img))
 
 
 def read_parallel(files, subset_size=None, n_jobs=None):
@@ -269,29 +311,27 @@ def _get_number_of_samples(df: pd.DataFrame, size: FloatOrInt):
     raise ValueError(f'unexpected sample size value: {size}')
 
 
-def to_pil_image(points, size, bg_color='white', stroke_color='black', lw=2):
-    canvas = PILImage.new('RGB', size, color=bg_color)
+def to_pil_image(points, img_size, bg_color='white', stroke_color='black',
+                 stroke_width=3):
+
+    canvas = PILImage.new('RGB', img_size, color=bg_color)
     draw = PILDraw.Draw(canvas)
-    chunks = [int(x) for x in points.split(',')]
-    while len(chunks) >= 4:
-        line, chunks = chunks[:4], chunks[2:]
-        draw.line(tuple(line), fill=stroke_color, width=lw)
-    image = Image(to_tensor(canvas))
-    return image
+    for segment in points.split('|'):
+        chunks = [int(x) for x in segment.split(',')]
+        while len(chunks) >= 4:
+            line, chunks = chunks[:4], chunks[2:]
+            draw.line(tuple(line), fill=stroke_color, width=stroke_width)
+    return canvas
 
 
 def to_tuples(segments):
     return [list(zip(*segment)) for segment in eval(segments)]
-    # return list(chain(*[zip(*segment) for segment in eval(segments)]))
 
 
 def to_string(segments):
     strings = [','.join([str(x) for x in chain(*segment)]) for segment in to_tuples(segments)]
     string = '|'.join(strings)
     return string
-
-
-    # return ','.join([str(x) for x in chain(*to_tuples(segments))])
 
 
 if __name__ == '__main__':
