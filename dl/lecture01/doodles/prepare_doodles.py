@@ -1,3 +1,7 @@
+"""
+The script takes original Quick Draw CSV and splits into training and validation
+subsets to simplify training process.
+"""
 from pathlib import Path
 from functools import partial
 from multiprocessing import Pool, cpu_count

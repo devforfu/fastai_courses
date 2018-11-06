@@ -1,3 +1,9 @@
+"""
+Converts image strokes from CSV file into folder with PIL images.
+
+Each stroke is converted into a single PIL image file with key_id
+used as a file name.
+"""
 import argparse
 from pathlib import Path
 from functools import partial
