@@ -18,6 +18,7 @@ from PIL import Image
 PATH = Path.home()/'data'/'facial_expressions'/'fer2013'
 INPUT_FILE = PATH/'fer2013.csv'
 OUTPUT_DIR = PATH/'images'
+
 IMG_SZ = 48
 
 VERBOSE_NAMES = {
