@@ -1,3 +1,4 @@
+import json
 import logging
 import logging.config
 from datetime import datetime
@@ -31,7 +32,7 @@ DEFAULT_LOGGER = {
             'class': 'logging.FileHandler',
             'formatter': 'full',
             'level': 'INFO',
-            'filename': LOG_FILE_NAME
+            'filename': '@log_file_name'
         }
     },
     'formatters': {
@@ -41,8 +42,13 @@ DEFAULT_LOGGER = {
 }
 
 
-def get_logger(name='main', level=logging.INFO):
-    logging.config.dictConfig(DEFAULT_LOGGER)
+def get_logger(name='main', level=logging.INFO, log_path=None):
+    config = DEFAULT_LOGGER.copy()
+    if log_path is not None:
+        config_str = json.dumps(config)
+        config = json.loads(
+            config_str.replace('@log_file_name', str(log_path)))
+    logging.config.dictConfig(config)
     log = logging.getLogger(name)
     log.setLevel(level)
     return log
