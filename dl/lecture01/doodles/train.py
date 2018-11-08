@@ -4,6 +4,7 @@ from fastai import *
 from fastai.vision import *
 from fastai.metrics import *
 from fastai.metrics import accuracy, error_rate
+from fastai.callbacks import CSVLogger
 from fastai.callbacks.tracker import SaveModelCallback
 from torchvision.models import resnet18, resnet34, resnet50
 
@@ -20,7 +21,6 @@ DATA_ROOT = Path.home()/'data'/'doodle'
 
 
 def main():
-    global WRITER_FN
     args = parse_args()
 
     logger = args.log
@@ -37,17 +37,38 @@ def main():
     logger.info('Reading testing dataset...')
     test_ds = ImageClassificationDataset.from_single_folder(args.test, classes=train_ds.classes)
 
-    bunch = ImageDataBunch.create(train_ds, valid_ds, test_ds, bs=args.batch_size, size=args.image_size)
-    logger.info('Datasets are prepared! The model is ready for training')
+    ds_tfms = get_transforms()
+    train_tfms, valid_tfms = ds_tfms
+    logger.info('Building data bunch with transformations')
+    logger.info('Training transforms:')
+    for trf in train_tfms:
+        logger.info(f'\t {trf}')
+    logger.info('Validation transforms:')
+    for trf in valid_tfms:
+        logger.info(f'\t {trf}')
 
+    bunch = ImageDataBunch.create(
+        train_ds, valid_ds, test_ds,
+        bs=args.batch_size, size=args.image_size,
+        ds_tfms=ds_tfms)
+
+    logger.info(f'Normalizing data with ImageNet stats: {imagenet_stats}')
+    bunch.normalize(imagenet_stats)
+
+    logger.info('Datasets are prepared! The model is ready for training')
     learn = create_cnn(bunch, args.network, path=args.models_path)
+    cbs = [SaveModelCallback(learn), CSVLogger(learn)]
 
     logger.info('Start model training...')
-    cbs = [SaveModelCallback(learn)]
     learn.metrics = [accuracy, error_rate]
     learn.fit_one_cycle(args.n_epochs, callbacks=cbs, max_lr=args.learning_rates)
     path = learn.save(f'{args.arch_name}_{args.suffix}')
     logger.info('Done! Model saved into %s', path)
+
+    logger.info('Interpreting results...')
+    interp = ClassificationInterpretation.from_learner(learn)
+    acc = (interp.pred_class == interp.y_true).float().mean().numpy().item()
+    logger.info(f'Validation accuracy: {acc:2.2%}')
 
 
 def parse_args():
