@@ -44,10 +44,11 @@ DEFAULT_LOGGER = {
 
 def get_logger(name='main', level=logging.INFO, log_path=None):
     config = DEFAULT_LOGGER.copy()
-    if log_path is not None:
-        config_str = json.dumps(config)
-        config = json.loads(
-            config_str.replace('@log_file_name', str(log_path)))
+    if log_path is None:
+        log_path = LOG_FILE_NAME
+    config_str = json.dumps(config)
+    config = json.loads(
+        config_str.replace('@log_file_name', str(log_path)))
     logging.config.dictConfig(config)
     log = logging.getLogger(name)
     log.setLevel(level)
