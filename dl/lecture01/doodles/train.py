@@ -2,13 +2,12 @@ import argparse
 
 from fastai import *
 from fastai.vision import *
-from fastai.metrics import *
 from fastai.metrics import accuracy, error_rate
 from fastai.callbacks import CSVLogger
 from fastai.callbacks.tracker import SaveModelCallback
 from torchvision.models import resnet18, resnet34, resnet50
 
-from logger import get_logger, LOG_FILE_NAME
+from projects.logger import get_logger, LOG_FILE_NAME
 
 
 ARCHS = {

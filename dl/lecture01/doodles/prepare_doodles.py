@@ -8,7 +8,7 @@ from multiprocessing import Pool, cpu_count
 
 import pandas as pd
 
-from logger import get_logger
+from projects.logger import get_logger
 
 
 PATH = Path.home()/'data'/'doodle'

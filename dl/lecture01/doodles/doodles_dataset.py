@@ -29,7 +29,7 @@ from fastai.vision import (
     Image
 )
 
-from logger import get_logger
+from projects.logger import get_logger
 
 
 PATH = Path.home()/'data'/'doodle'

@@ -14,7 +14,7 @@ import pandas as pd
 from PIL import Image
 from fastai.core import partition
 
-from logger import get_logger
+from projects.logger import get_logger
 
 
 PATH = Path.home()/'data'/'furniture'

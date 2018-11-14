@@ -1,13 +1,7 @@
-import math
-import time
-from timeit import default_timer
-
-import torch
-from torchvision import models as tvm
 from fastai import *
 from fastai.vision import *
 
-from logger import get_logger
+from projects.logger import get_logger
 
 
 ROOT = Path.home()/'data'/'doodle'

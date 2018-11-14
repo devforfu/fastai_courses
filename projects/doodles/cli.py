@@ -3,7 +3,7 @@ from pathlib import Path
 
 import torch
 
-from projects.logger import get_logger, LOG_FILE_NAME
+from logger import get_logger, LOG_FILE_NAME
 
 
 def parse_args(archs):
