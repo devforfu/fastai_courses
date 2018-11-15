@@ -48,7 +48,7 @@ class QuickDraw(Dataset):
 
     def __init__(self, root: Path, train: bool=True, take_subset: bool=True,
                  subset_size: FloatOrInt=1000, bg_color='black',
-                 stroke_color='white', lw=2, use_cache: bool=True,
+                 stroke_color='white', lw=5, use_cache: bool=True,
                  parallel=True, log=None):
 
         log = log or get_logger()
