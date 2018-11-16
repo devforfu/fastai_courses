@@ -30,13 +30,25 @@ def main():
         default=Path.cwd(),
         help='Output directory with test images'
     )
+    parser.add_argument(
+        '-bg', '--background',
+        default='black', choices=['black', 'white'],
+        help='Black or white background'
+    )
+    parser.add_argument(
+        '-lw', '--line-width',
+        default=4, type=int,
+        help='Stroke line width'
+    )
     args = parser.parse_args()
 
     test_data = pd.read_csv(args.file)
     keys = test_data.key_id.tolist()
     strokes = test_data.drawing.map(to_string).tolist()
 
-    worker = partial(save_image, args.output)
+    bg = args.background
+    fg = 'white' if bg == 'black' else 'black'
+    worker = partial(save_image, args.output, bg, fg, args.line_width)
     records = []
     with tqdm(total=len(strokes)) as bar:
         with Pool(cpu_count()) as pool:
@@ -50,9 +62,10 @@ def main():
     print('Done! Meta information saved into file %s' % meta_path)
 
 
-def save_image(output_folder, args):
+def save_image(output_folder, bg, fg, lw, args):
     image_key, stroke = args
-    img = to_pil_image(stroke, IMG_SZ)
+    img = to_pil_image(
+        stroke, IMG_SZ, bg_color=bg, stroke_color=fg, stroke_width=lw)
     path = Path(output_folder)/f'{image_key}.png'
     img.save(path, 'png')
     return {'path': path.as_posix(), 'key': image_key}

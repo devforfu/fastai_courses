@@ -15,8 +15,6 @@ import pandas as pd
 from PIL import Image as PILImage
 from PIL import ImageDraw as PILDraw
 
-from logger import get_logger
-
 
 FloatOrInt = Union[float, int]
 ImageSize = Tuple[int, int]
@@ -53,7 +51,6 @@ class QuickDraw(Dataset):
                  bg_color='black', stroke_color='white', lw=4, use_cache: bool=True,
                  parallel=True, log=None):
 
-        log = log or get_logger()
         subfolder = root/('train' if train else 'valid')
         cache_file = subfolder.parent / 'cache' / f'{subfolder.name}_{subset_size}.feather'
 
@@ -187,7 +184,6 @@ class TestImagesFolder(Dataset):
         return len(self.images)
 
     def __getitem__(self, item):
-        breakpoint()
         img = self.loader(self.images[item])
         img.thumbnail(self.img_size, PILImage.ANTIALIAS)
-        return img, self.pseudolabel
+        return Image(to_tensor(img)), self.pseudolabel

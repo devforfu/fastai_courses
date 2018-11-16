@@ -46,7 +46,7 @@ def main():
                   log=log,
                   path=path)
 
-    name = f'{args.arch_name}_{img_sz}_{n}'
+    name = f'{args.arch_name}_{args.suffix}_{img_sz}_{n}'
     learn.save(name)
 
     # learn = train(arch=arch,
