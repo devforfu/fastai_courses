@@ -49,16 +49,17 @@ def main():
     name = f'{args.arch_name}_{img_sz}_{n}'
     learn.save(name)
 
-    learn = train(arch=arch,
-                  preload=name,
-                  epochs=int(max(1, n//2)),
-                  lr=3e-2/3,
-                  img_size=img_sz*3//2,
-                  batch_size=bs*2,
-                  train_size=trn_sz,
-                  valid_size=val_sz,
-                  log=log,
-                  path=path)
+    # learn = train(arch=arch,
+    #               preload=name,
+    #               epochs=int(max(1, n//2)),
+    #               lr=3e-2/3,
+    #               img_size=img_sz*3//2,
+    #               batch_size=bs*2,
+    #               train_size=trn_sz,
+    #               valid_size=val_sz,
+    #               log=log,
+    #               path=path)
+
 
     print('Done!')
 
@@ -103,7 +104,8 @@ def create_data(img_size, bs, train_size, valid_size, path, log):
     tst_ds = TestImagesFolder(TEST, img_size=img_size)
     bunch = ImageDataBunch.create(
         trn_ds, val_ds, tst_ds,
-        path=path, bs=bs, ds_tfms=create_transforms())
+        num_workers=4, path=path,
+        bs=bs, ds_tfms=create_transforms())
     bunch.normalize(imagenet_stats)
     return bunch
 

@@ -10,7 +10,7 @@ import numpy as np
 from torch.nn import functional as F
 from torch.utils.data import Dataset
 from torchvision.transforms.functional import to_tensor
-from torchvision.datasets.folder import pil_loader, has_file_allowed_extension, IMG_EXTENSIONS
+from torchvision.datasets.folder import pil_loader, is_image_file
 import pandas as pd
 from PIL import Image as PILImage
 from PIL import ImageDraw as PILDraw
@@ -175,9 +175,7 @@ class TestImagesFolder(Dataset):
         assert path.is_dir() and path.exists(), 'Not a directory!'
         assert path.stat().st_size > 0, 'Directory is empty'
 
-        images = [
-            file for file in path.iterdir()
-            if has_file_allowed_extension(str(file), IMG_EXTENSIONS)]
+        images = [file for file in path.iterdir() if is_image_file(str(file))]
 
         self.path = path
         self.img_size = img_size
@@ -189,6 +187,7 @@ class TestImagesFolder(Dataset):
         return len(self.images)
 
     def __getitem__(self, item):
+        breakpoint()
         img = self.loader(self.images[item])
-        img = img.thumbnail(self.img_size, PILImage.ANTIALIAS)
+        img.thumbnail(self.img_size, PILImage.ANTIALIAS)
         return img, self.pseudolabel
