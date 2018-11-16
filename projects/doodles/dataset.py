@@ -1,6 +1,6 @@
 from functools import partial
 from itertools import chain
-from typing import Union
+from typing import Union, Tuple
 from pathlib import Path
 from multiprocessing import Pool, cpu_count
 
@@ -19,6 +19,10 @@ from logger import get_logger
 
 
 FloatOrInt = Union[float, int]
+ImageSize = Tuple[int, int]
+
+
+RAW_SIZE = 256, 256
 
 
 def fastai_dataset(loss_func):
@@ -44,11 +48,9 @@ def fastai_dataset(loss_func):
 @fastai_dataset(F.cross_entropy)
 class QuickDraw(Dataset):
 
-    img_size = (256, 256)
-
     def __init__(self, root: Path, train: bool=True, take_subset: bool=True,
-                 subset_size: FloatOrInt=1000, bg_color='black',
-                 stroke_color='white', lw=5, use_cache: bool=True,
+                 subset_size: FloatOrInt=1000, img_size: ImageSize=RAW_SIZE,
+                 bg_color='black', stroke_color='white', lw=4, use_cache: bool=True,
                  parallel=True, log=None):
 
         log = log or get_logger()
@@ -79,6 +81,7 @@ class QuickDraw(Dataset):
 
         self.root = root
         self.train = train
+        self.img_size = img_size
         self.bg_color = bg_color
         self.stroke_color = stroke_color
         self.lw = lw
@@ -97,7 +100,7 @@ class QuickDraw(Dataset):
         return image, target
 
     def to_image_tensor(self, points):
-        img = to_pil_image(points, self.img_size, self.bg_color, self.stroke_color, self.lw)
+        img = strokes_to_pil(points, self.img_size, self.bg_color, self.stroke_color, self.lw)
         return Image(to_tensor(img))
 
 
@@ -133,16 +136,22 @@ def _get_number_of_samples(df: pd.DataFrame, size: FloatOrInt):
     raise ValueError(f'unexpected sample size value: {size}')
 
 
-def to_pil_image(points, img_size, bg_color='white', stroke_color='black',
-                 stroke_width=3):
+def strokes_to_pil(points, img_size, bg_color='white', stroke_color='black',
+                   stroke_width=3):
+
+    x_ref, y_ref = RAW_SIZE
+    x_max, y_max = img_size
+    x_ratio = x_max/float(x_ref)
+    y_ratio = y_max/float(y_ref)
 
     canvas = PILImage.new('RGB', img_size, color=bg_color)
     draw = PILDraw.Draw(canvas)
     for segment in points.split('|'):
         chunks = [int(x) for x in segment.split(',')]
         while len(chunks) >= 4:
-            line, chunks = chunks[:4], chunks[2:]
-            draw.line(tuple(line), fill=stroke_color, width=stroke_width)
+            (x1, y1, x2, y2), chunks = chunks[:4], chunks[2:]
+            scaled = int(x1*x_ratio), int(y1*y_ratio), int(x2*x_ratio), int(y2*y_ratio)
+            draw.line(tuple(scaled), fill=stroke_color, width=stroke_width)
     return canvas
 
 
@@ -158,7 +167,9 @@ def to_string(segments):
 
 class TestImagesFolder(Dataset):
 
-    def __init__(self, path, loader=pil_loader, pseudolabel=0):
+    def __init__(self, path, img_size: ImageSize=RAW_SIZE,
+                 loader=pil_loader, pseudolabel=0):
+
         path = Path(path)
 
         assert path.is_dir() and path.exists(), 'Not a directory!'
@@ -169,6 +180,7 @@ class TestImagesFolder(Dataset):
             if has_file_allowed_extension(str(file), IMG_EXTENSIONS)]
 
         self.path = path
+        self.img_size = img_size
         self.loader = loader
         self.images = images
         self.pseudolabel = pseudolabel
@@ -178,4 +190,5 @@ class TestImagesFolder(Dataset):
 
     def __getitem__(self, item):
         img = self.loader(self.images[item])
+        img = img.thumbnail(self.img_size, PILImage.ANTIALIAS)
         return img, self.pseudolabel
